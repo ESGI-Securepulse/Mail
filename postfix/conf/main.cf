@@ -1,5 +1,5 @@
-# General
-myhostname = mail.securepulse.fr
+# General — values substituted by entrypoint.sh via envsubst
+myhostname = POSTFIX_HOSTNAME_PLACEHOLDER
 mydomain = securepulse.fr
 myorigin = $mydomain
 inet_interfaces = all
@@ -8,16 +8,26 @@ inet_protocols = ipv4
 # Accept mail for this domain
 mydestination =
 virtual_mailbox_domains = securepulse.fr
-virtual_transport = lmtp:dovecot:24
-virtual_mailbox_maps = hash:/etc/postfix/virtual
+
+# Deliver to Dovecot LMTP (host resolved by entrypoint)
+virtual_transport = lmtp:LMTP_HOST_PLACEHOLDER:24
+
+# Virtual mailbox map from LDAP
+virtual_mailbox_maps = ldap:/etc/postfix/ldap-vmailbox.cf
+virtual_alias_maps   = ldap:/etc/postfix/ldap-aliases.cf
 
 # Relay
-mynetworks = 127.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+mynetworks = 127.0.0.0/8 172.16.0.0/12 192.168.0.0/16 10.0.0.0/8
 relayhost =
 
-# SASL auth via Dovecot (for outgoing mail submission)
+# Queue settings (accept up to 1 min delay per requirement)
+maximal_queue_lifetime = 1m
+bounce_queue_lifetime = 1m
+qmgr_message_recipient_minimum = 1
+
+# SASL auth via Dovecot
 smtpd_sasl_type = dovecot
-smtpd_sasl_path = inet:dovecot:12345
+smtpd_sasl_path = inet:LMTP_HOST_PLACEHOLDER:12345
 smtpd_sasl_auth_enable = yes
 smtpd_sasl_security_options = noanonymous
 smtpd_recipient_restrictions =
@@ -31,6 +41,6 @@ smtpd_tls_key_file = /etc/postfix/certs/server.key
 smtpd_tls_security_level = may
 smtp_tls_security_level = may
 
-# Disable local delivery (Dovecot handles it via LMTP)
+# No local delivery
 local_recipient_maps =
 local_transport = error:local mail delivery is disabled

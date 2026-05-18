@@ -1,0 +1,8 @@
+server_host = LDAP_HOSTS_PLACEHOLDER
+search_base = LDAP_BASE_DN_PLACEHOLDER
+bind_dn = LDAP_BIND_DN_PLACEHOLDER
+bind_pw = LDAP_BIND_PW_PLACEHOLDER
+query_filter = (&(objectClass=inetOrgPerson)(mail=%s))
+result_attribute = uid
+result_format = %s/
+version = 3
