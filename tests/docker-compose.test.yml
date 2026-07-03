@@ -1,0 +1,150 @@
+name: mail-ha-test
+###############################################################################
+# Mail — banc de test HA (1 site, stockage partagé via storage-lucien)
+#
+# Vérifie ce que le smoke-test racine ne peut pas : authentification LDAP
+# réelle, montage NFS storage-lucien, livraison LMTP Postfix -> Dovecot,
+# et surtout que les DEUX instances Dovecot du site partagent bien le MÊME
+# stockage (remplace la réplication dsync retirée).
+#
+# Port range de test : 15200-15299.
+###############################################################################
+
+networks:
+  backbone:
+    ipam: { config: [{ subnet: 10.10.0.0/24 }] }
+  site-a:
+    ipam: { config: [{ subnet: 10.10.71.0/24 }] }
+
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.13
+    container_name: mailtest-etcd
+    command:
+      - etcd
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd:2379
+    networks: { backbone: { ipv4_address: 10.10.0.2 } }
+    ports: ["15279:2379"]
+    healthcheck:
+      test: ["CMD", "etcdctl", "--endpoints=http://localhost:2379", "endpoint", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  coredns:
+    build: ../../DNS
+    container_name: mailtest-coredns
+    networks: { backbone: { ipv4_address: 10.10.0.100 } }
+    depends_on:
+      etcd: { condition: service_healthy }
+
+  ldap:
+    build: ../../LDAP
+    container_name: mailtest-ldap
+    hostname: ldap-a
+    environment:
+      ETCD_URL: http://etcd:2379
+      SITE: site-a
+      LDAP_ID: "1"
+      LDAP_SEED_DATA: "true"
+      LDAP_BASE_DN: dc=securepulse,dc=fr
+      LDAP_ROOT_DN: cn=admin,dc=securepulse,dc=fr
+      LDAP_ROOT_PASSWORD: admin
+    volumes:
+      - ../../LDAP/bootstrap:/bootstrap:ro
+    networks: { backbone: {}, site-a: { ipv4_address: 10.10.71.10 } }
+    dns: 10.10.0.100
+    depends_on:
+      etcd: { condition: service_healthy }
+
+  storage-1:
+    build: ../../storage-lucien
+    container_name: mailtest-storage-1
+    hostname: storage-a-1
+    cap_add: [SYS_ADMIN, NET_ADMIN]
+    devices: ["/dev/fuse"]
+    security_opt: ["apparmor:unconfined"]
+    environment:
+      ETCD_URL: http://etcd:2379
+      SITE: site-a
+      STORAGE_ID: "1"
+      STORAGE_VIP: "10.10.71.19"
+    networks: { backbone: {}, site-a: { ipv4_address: 10.10.71.11 } }
+    depends_on:
+      etcd: { condition: service_healthy }
+
+  storage-2:
+    build: ../../storage-lucien
+    container_name: mailtest-storage-2
+    hostname: storage-a-2
+    cap_add: [SYS_ADMIN, NET_ADMIN]
+    devices: ["/dev/fuse"]
+    security_opt: ["apparmor:unconfined"]
+    environment:
+      ETCD_URL: http://etcd:2379
+      SITE: site-a
+      STORAGE_ID: "2"
+      STORAGE_VIP: "10.10.71.19"
+    networks: { backbone: {}, site-a: { ipv4_address: 10.10.71.12 } }
+    depends_on:
+      etcd: { condition: service_healthy }
+
+  dovecot-1:
+    build: ../dovecot
+    container_name: mailtest-dovecot-1
+    hostname: dovecot-a-1
+    cap_add: [SYS_ADMIN]
+    environment:
+      ETCD_URL: http://etcd:2379
+      SITE: site-a
+      LDAP_BASE_DN: dc=securepulse,dc=fr
+      LDAP_BIND_DN: cn=admin,dc=securepulse,dc=fr
+      LDAP_BIND_PW: admin
+    networks: { backbone: {}, site-a: { ipv4_address: 10.10.71.20 } }
+    dns: 10.10.0.100
+    depends_on:
+      etcd: { condition: service_healthy }
+      ldap: { condition: service_started }
+      storage-1: { condition: service_started }
+      storage-2: { condition: service_started }
+    ports: ["15293:143"]
+
+  dovecot-2:
+    build: ../dovecot
+    container_name: mailtest-dovecot-2
+    hostname: dovecot-a-2
+    cap_add: [SYS_ADMIN]
+    environment:
+      ETCD_URL: http://etcd:2379
+      SITE: site-a
+      LDAP_BASE_DN: dc=securepulse,dc=fr
+      LDAP_BIND_DN: cn=admin,dc=securepulse,dc=fr
+      LDAP_BIND_PW: admin
+    networks: { backbone: {}, site-a: { ipv4_address: 10.10.71.21 } }
+    dns: 10.10.0.100
+    depends_on:
+      etcd: { condition: service_healthy }
+      ldap: { condition: service_started }
+      storage-1: { condition: service_started }
+      storage-2: { condition: service_started }
+    ports: ["15294:143"]
+
+  postfix-1:
+    build: ../postfix
+    container_name: mailtest-postfix-1
+    hostname: postfix-a-1
+    environment:
+      ETCD_URL: http://etcd:2379
+      SITE: site-a
+      LDAP_BASE_DN: dc=securepulse,dc=fr
+      LDAP_BIND_DN: cn=admin,dc=securepulse,dc=fr
+      LDAP_BIND_PW: admin
+      POSTFIX_HOSTNAME: mail.securepulse.fr
+    networks: { backbone: {}, site-a: { ipv4_address: 10.10.71.30 } }
+    dns: 10.10.0.100
+    depends_on:
+      etcd: { condition: service_healthy }
+      dovecot-1: { condition: service_started }
+    ports: ["15225:25"]

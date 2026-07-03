@@ -55,10 +55,16 @@ wait_etcd
 LMTP_HOST="${LMTP_HOST:-lmtp.all.securepulse.fr}"
 export LMTP_HOST
 
-# LDAP hosts: prefer round-robin DNS across all LDAP nodes
+# LDAP hosts: prefer round-robin DNS across all LDAP nodes.
+# Retried (not a one-shot lookup): at cold start this container easily
+# starts before LDAP finishes its own bootstrap + etcd registration.
 if [ -z "$LDAP_HOSTS" ]; then
-    LDAP_HOSTS=$(getent hosts ldap.all.securepulse.fr 2>/dev/null | \
-        awk '{print $1}' | tr '\n' ' ' | xargs || echo "ldap.all.securepulse.fr")
+    for i in $(seq 1 30); do
+        LDAP_HOSTS=$(getent hosts ldap.all.securepulse.fr 2>/dev/null | awk '{print $1}' | tr '\n' ' ' | xargs)
+        [ -n "$LDAP_HOSTS" ] && break
+        sleep 2
+    done
+    LDAP_HOSTS="${LDAP_HOSTS:-ldap.all.securepulse.fr}"
     export LDAP_HOSTS
 fi
 

@@ -3,7 +3,8 @@ set -e
 
 ETCD_URL="${ETCD_URL:-http://etcd:2379}"
 SITE="${SITE:-local}"
-DOVEADM_PASSWORD="${DOVEADM_PASSWORD:-doveadm_secret}"
+DOMAIN="${DOMAIN:-securepulse.fr}"
+STORAGE_HOST="${STORAGE_HOST:-storage.${SITE}.${DOMAIN}}"
 
 _b64()  { printf '%s' "$1" | base64 | tr -d '\n'; }
 _b64d() { printf '%s' "$1" | base64 -d 2>/dev/null; }
@@ -56,15 +57,21 @@ deregister() {
     etcd_del "/skydns/fr/securepulse/all/lmtp/${HOSTNAME}"
 }
 
-# Find first other Dovecot node IP from etcd
-find_replica() {
-    local my_ip
-    my_ip=$(get_my_ip)
-    etcd_list "/skydns/fr/securepulse/all/dovecot/" | while read -r val; do
-        [ -z "$val" ] && continue
-        ip=$(printf '%s' "$val" | jq -r '.host // empty' 2>/dev/null) || continue
-        [ "$ip" != "$my_ip" ] && [ -n "$ip" ] && echo "$ip" && return
+# Monte le NFS haute dispo exporté par storage-lucien (VIP Pacemaker du DC).
+# Les 2 instances Dovecot d'un même DC montent le MÊME export -> plus besoin
+# de réplication applicative (dsync) entre elles, cf. Dockerfile/10-master.conf.
+mount_storage() {
+    echo "[mount] Waiting for ${STORAGE_HOST}:/mail..."
+    for i in $(seq 1 60); do
+        if mount -t nfs4 -o vers=4.2,proto=tcp "${STORAGE_HOST}:/mail" /var/mail 2>/tmp/mount.err; then
+            echo "[mount] /var/mail mounted from ${STORAGE_HOST}:/mail"
+            return 0
+        fi
+        sleep 2
     done
+    echo "[mount] FAILED after retries:"
+    cat /tmp/mount.err 2>/dev/null
+    return 1
 }
 
 cleanup() {
@@ -72,6 +79,7 @@ cleanup() {
     deregister
     kill "$DOVECOT_PID" 2>/dev/null || true
     wait "$DOVECOT_PID" 2>/dev/null || true
+    umount /var/mail 2>/dev/null || true
     exit 0
 }
 
@@ -79,10 +87,18 @@ cleanup() {
 
 wait_etcd
 
-# Resolve LDAP hosts — prefer all.ldap.securepulse.fr round-robin
+# Resolve LDAP hosts — prefer all.ldap.securepulse.fr round-robin.
+# Retries: at cold start, this container can easily win the race against
+# LDAP's own bootstrap (schema load + seed data + etcd registration), so a
+# single getent attempt can come back empty and silently break LDAP auth
+# for the rest of this container's life.
 if [ -z "$LDAP_HOSTS" ]; then
-    LDAP_HOSTS=$(getent hosts ldap.all.securepulse.fr 2>/dev/null | \
-        awk '{print $1}' | tr '\n' ' ' | xargs || echo "ldap.all.securepulse.fr")
+    for i in $(seq 1 30); do
+        LDAP_HOSTS=$(getent hosts ldap.all.securepulse.fr 2>/dev/null | awk '{print $1}' | tr '\n' ' ' | xargs)
+        [ -n "$LDAP_HOSTS" ] && break
+        sleep 2
+    done
+    LDAP_HOSTS="${LDAP_HOSTS:-ldap.all.securepulse.fr}"
     export LDAP_HOSTS
 fi
 echo "[init] LDAP_HOSTS=${LDAP_HOSTS}"
@@ -95,17 +111,15 @@ sed -i \
     -e "s|LDAP_BASE_DN_PLACEHOLDER|${LDAP_BASE_DN}|g" \
     /etc/dovecot/dovecot-ldap.conf
 
-# Find a replication peer — disable replication if we're alone
-REPLICA_IP=$(find_replica)
-if [ -n "$REPLICA_IP" ]; then
-    echo "[init] Replication peer: ${REPLICA_IP}"
-    sed -i \
-        -e "s/DOVEADM_PASSWORD_PLACEHOLDER/${DOVEADM_PASSWORD}/g" \
-        -e "s/REPLICA_HOST_PLACEHOLDER/${REPLICA_IP}/g" \
-        /etc/dovecot/conf.d/90-replication.conf
+# STORAGE_MODE=local : échappatoire pour le smoke-test mono-nœud sans HA
+# (Mail/docker-compose.yml, pas de storage-lucien) — le volume Docker local
+# ./mail sert alors de /var/mail directement. Comportement par défaut
+# (STORAGE_MODE=nfs, tout déploiement réel/testé en intégration) : montage
+# NFS haute dispo obligatoire, on ne démarre pas sans lui.
+if [ "${STORAGE_MODE:-nfs}" = "nfs" ]; then
+    mount_storage || { echo "[FATAL] Could not mount storage, aborting"; exit 1; }
 else
-    echo "[init] No replica found — replication disabled for now"
-    rm -f /etc/dovecot/conf.d/90-replication.conf
+    echo "[mount] STORAGE_MODE=local — volume local /var/mail (pas de HA, smoke-test uniquement)"
 fi
 
 chown -R vmail:vmail /var/mail 2>/dev/null || true
