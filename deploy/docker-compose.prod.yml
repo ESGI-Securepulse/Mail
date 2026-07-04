@@ -1,0 +1,66 @@
+# Mail/deploy/docker-compose.prod.yml — un nœud mail (Postfix+Dovecot+
+# RoundCube) pour CE serveur réel. STORAGE_HOST (NFS storage-lucien) et
+# LDAP_HOSTS sont résolus dynamiquement via CoreDNS (storage.<site>.<domain>,
+# ldap.all.<domain>) — DNS_RESOLVER_IP doit pointer sur le CoreDNS de CE
+# site pour que cette résolution locale-d'abord fonctionne (`dns:` ici,
+# comme dans integration/docker-compose.yml).
+services:
+  dovecot:
+    build: ../dovecot
+    container_name: dovecot-${SITE}-${NODE_ID}
+    restart: unless-stopped
+    cap_add: [SYS_ADMIN]
+    dns: "${DNS_RESOLVER_IP}"
+    environment:
+      SITE: "${SITE}"
+      DOMAIN: "${DOMAIN}"
+      ETCD_URL: "${ETCD_URL}"
+      STORAGE_MODE: "${STORAGE_MODE}"
+      LDAP_BASE_DN: "${LDAP_BASE_DN}"
+      LDAP_BIND_DN: "${LDAP_BIND_DN}"
+      LDAP_BIND_PW: "${LDAP_BIND_PW}"
+      DOVEADM_PASSWORD: "${DOVEADM_PASSWORD}"
+    ports:
+      - "143:143"
+      - "993:993"
+    volumes:
+      - ../certs:/etc/dovecot/certs:ro
+
+  postfix:
+    build: ../postfix
+    container_name: postfix-${SITE}-${NODE_ID}
+    hostname: "${POSTFIX_HOSTNAME}"
+    restart: unless-stopped
+    dns: "${DNS_RESOLVER_IP}"
+    environment:
+      SITE: "${SITE}"
+      DOMAIN: "${DOMAIN}"
+      ETCD_URL: "${ETCD_URL}"
+      LDAP_BASE_DN: "${LDAP_BASE_DN}"
+      LDAP_BIND_DN: "${LDAP_BIND_DN}"
+      LDAP_BIND_PW: "${LDAP_BIND_PW}"
+      POSTFIX_HOSTNAME: "${POSTFIX_HOSTNAME}"
+    depends_on:
+      - dovecot
+    ports:
+      - "25:25"
+      - "587:587"
+    volumes:
+      - ../certs:/etc/postfix/certs:ro
+
+  roundcube:
+    image: roundcube/roundcubemail:latest
+    container_name: roundcube-${SITE}-${NODE_ID}
+    restart: unless-stopped
+    depends_on:
+      - dovecot
+      - postfix
+    ports:
+      - "80:80"
+    environment:
+      - ROUNDCUBEMAIL_DEFAULT_HOST=dovecot
+      - ROUNDCUBEMAIL_DEFAULT_PORT=143
+      - ROUNDCUBEMAIL_SMTP_SERVER=postfix
+      - ROUNDCUBEMAIL_SMTP_PORT=25
+      - ROUNDCUBEMAIL_SKIN=elastic
+      - ROUNDCUBEMAIL_DB_TYPE=sqlite

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Ajouté
+- `deploy/` : déploiement réel containerisé (un nœud mail
+  Postfix+Dovecot+RoundCube par serveur). `generate-config.sh` produit le
+  `.env` du nœud (génère un `DOVEADM_PASSWORD` aléatoire si non fourni),
+  `deploy.sh <site>-<id>` lance la stack. `dns:` pointe explicitement sur
+  le CoreDNS du site (`--dns-resolver-ip`) pour que la résolution
+  locale-d'abord (`ldap.all.`, `storage.<site>.`) fonctionne en dehors du
+  sous-réseau Docker partagé du banc de test.
+
 ### Modifié
 - **Dovecot monte désormais le NFS haute disponibilité exporté par
   `storage-lucien`** (`storage.<site>.<domain>:/mail`) au lieu d'un volume

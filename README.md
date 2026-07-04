@@ -6,12 +6,13 @@ découverte de service via etcd/CoreDNS (`DNS/`), stockage haute
 disponibilité via NFS monté depuis `storage-lucien/` (remplace la
 réplication applicative Dovecot dsync, retirée — voir `CHANGELOG.md`).
 
-## Deux modes de déploiement
+## Modes de déploiement
 
 | Mode | Fichier | Usage |
 |---|---|---|
 | Smoke-test mono-nœud | `docker-compose.yml` (racine) | Vérifie juste que les images démarrent. **Pas de LDAP** (auth non fonctionnelle), **pas de HA** (`STORAGE_MODE=local`, volume Docker local). |
-| HA réelle (1 site) | `tests/docker-compose.test.yml` | LDAP + etcd + CoreDNS + storage-lucien (2 nœuds) + 2x Dovecot + Postfix. Authentification LDAP réelle, stockage partagé HA. |
+| HA réelle (1 site, banc de test) | `tests/docker-compose.test.yml` | LDAP + etcd + CoreDNS + storage-lucien (2 nœuds) + 2x Dovecot + Postfix. Authentification LDAP réelle, stockage partagé HA. |
+| **Déploiement réel (production)** | `deploy/` | Un nœud mail (Postfix+Dovecot+RoundCube) par serveur physique. |
 
 ```sh
 # Smoke-test rapide
@@ -20,7 +21,18 @@ docker compose up -d --build   # ports 15025 (SMTP), 15080 (webmail), 15143 (IMA
 # Test HA complet
 cd tests && docker compose -f docker-compose.test.yml up -d --build
 ./run_tests.sh
+
+# Déploiement réel
+cd deploy
+./generate-config.sh --site grenoble --node-id 1 --etcd-url http://<etcd-reachable>:2379 \
+    --dns-resolver-ip 10.20.1.100
+./deploy.sh grenoble-1
 ```
+
+`--dns-resolver-ip` doit pointer sur le CoreDNS de CE site (résolution
+locale-d'abord de `ldap.all.<domaine>`/`storage.<site>.<domaine>`, cf.
+`dns:` dans `docker-compose.prod.yml`). Voir `add_new_dc.sh` à la racine du
+projet pour générer la config de tout un DC en une commande.
 
 ## Variables d'environnement (Dovecot)
 

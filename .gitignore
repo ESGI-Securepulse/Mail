@@ -1,0 +1,2 @@
+deploy/sites/*
+!deploy/sites/.gitkeep
